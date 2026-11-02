@@ -174,7 +174,54 @@ def _append_query(url, query):
     return url + ("&" if "?" in url else "?") + query
 
 
+def _requests_get_json_follow_redirects(start_url):
+    # Prefer CanMV's supported requests package for GET. Its HTTP/TLS stream
+    # handling may receive Apps Script's redirect where the raw socket probe
+    # sees EOF. Do not pass allow_redirects: this firmware rejects that kwarg.
+    import requests
+    current_url = start_url
+    response = requests.get(current_url)
+    redirects = 0
+    while response.status_code in (301, 302, 303, 307, 308) and redirects < 3:
+        location = _header(response.headers, "Location")
+        try:
+            response.close()
+        except Exception:
+            pass
+        if not location:
+            raise OSError("Apps Script redirect had no Location header")
+        current_url = _resolve_location(current_url, location)
+        response = requests.get(current_url)
+        redirects += 1
+        print("REQUESTS_APPS_SCRIPT_REDIRECT_STATUS", response.status_code)
+    status = response.status_code
+    print("REQUESTS_APPS_SCRIPT_HTTP_STATUS", status)
+    try:
+        body = response.text
+    finally:
+        try:
+            response.close()
+        except Exception:
+            pass
+    if status in (301, 302, 303, 307, 308):
+        raise OSError("Too many Apps Script redirects")
+    if status < 200 or status >= 300:
+        raise OSError("Apps Script requests GET HTTP " + str(status))
+    if isinstance(body, bytes):
+        body = body.decode("utf-8")
+    return json.loads(body)
+
+
 def _get_json_follow_redirects(start_url):
+    try:
+        result = _requests_get_json_follow_redirects(start_url)
+        print("CANMV_REQUESTS_GET_OK")
+        return result
+    except Exception as exc:
+        print("CANMV_REQUESTS_GET_FAILED", str(exc))
+
+    # Keep the raw TLS implementation as a fallback so the log distinguishes
+    # a requests-package failure from a lower-level socket failure.
     current_url = start_url
     status, headers, body = _https_request("GET", current_url)
     redirects = 0
