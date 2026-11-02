@@ -19,18 +19,60 @@ def _header(headers, name):
     return ""
 
 
-def _read_response(stream, limit=8192):
-    """Collect one small HTTP response using the CanMV HTTPS read pattern."""
+def _response_complete(data):
+    """True once headers and body have arrived, False if more is expected,
+    None if the body only ends when the server closes the connection."""
+    header_end = data.find(b"\r\n\r\n")
+    if header_end < 0:
+        return False
+    head = data[:header_end].lower()
+    body = data[header_end + 4:]
+    if b"transfer-encoding: chunked" in head:
+        return body.endswith(b"0\r\n\r\n")
+    marker = b"\r\ncontent-length:"
+    start = head.find(marker)
+    if start < 0:
+        return None
+    start += len(marker)
+    end = head.find(b"\r\n", start)
+    if end < 0:
+        end = len(head)
+    return len(body) >= int(head[start:end].strip())
+
+
+def _read_response(stream, limit=8192, wait_ms=30000):
+    """Collect one small HTTP response.
+
+    On CanMV an empty read does not mean the server is done: read() returns
+    b'' when the socket timeout passes, on a reset and on a close alike, and
+    None when the TLS layer has nothing to hand over yet. Apps Script answers
+    only after doGet/doPost has run, so keep reading until the headers say the
+    response is complete, for up to wait_ms.
+    """
     data = b""
+    empty_reads = 0
+    start = time.ticks_ms()
     while True:
-        # Match Kendryte's CanMV HTTPS example: read until the server closes
-        # the connection (the request includes Connection: close).
-        chunk = stream.read()
-        if not chunk:
+        chunk = stream.read(512)
+        elapsed = time.ticks_diff(time.ticks_ms(), start)
+        if chunk:
+            if not data:
+                print("RAW_HTTPS_FIRST_BYTE_MS", elapsed)
+            data += chunk
+            if len(data) > limit:
+                raise OSError("HTTP response exceeded diagnostic limit")
+            if _response_complete(data):
+                return data
+            continue
+        empty_reads += 1
+        if empty_reads <= 5:
+            print("RAW_HTTPS_EMPTY_READ", repr(chunk), elapsed)
+        if data and _response_complete(data) is None:
             return data
-        data += chunk
-        if len(data) > limit:
-            raise OSError("HTTP response exceeded diagnostic limit")
+        if elapsed > wait_ms:
+            print("RAW_HTTPS_READ_GAVE_UP", empty_reads, elapsed)
+            return data
+        time.sleep_ms(200)
 
 
 def _decode_chunked(data):
@@ -50,20 +92,24 @@ def _decode_chunked(data):
         offset += size + 2
 
 
-def _write_all(stream, data):
+def _write_all(stream, data, wait_ms=20000):
+    # write() returns None when nothing could be written yet (EAGAIN), not
+    # after a full write, so wait and send the rest instead of stopping.
     offset = 0
+    start = time.ticks_ms()
     while offset < len(data):
         written = stream.write(data[offset:])
-        if written is None:
-            # Some MicroPython stream wrappers return None after a full write.
-            return
-        if written <= 0:
-            raise OSError("HTTPS request write stopped early")
-        offset += written
+        if written:
+            offset += written
+            continue
+        if time.ticks_diff(time.ticks_ms(), start) > wait_ms:
+            raise OSError(
+                "HTTPS request write stalled at %d/%d bytes" % (offset, len(data))
+            )
+        time.sleep_ms(50)
 
 
-def _https_request(method, url, body=None, read_body=True,
-                   skip_response_read=False):
+def _https_request(method, url, body=None, read_body=True):
     if not url.startswith("https://"):
         raise ValueError("Only HTTPS redirects are accepted")
     rest = url[8:]
@@ -116,9 +162,6 @@ def _https_request(method, url, body=None, read_body=True,
             pass
         print("RAW_HTTPS_SENT_BYTES", len(request_bytes))
 
-        if skip_response_read:
-            print("RAW_HTTPS_RESPONSE_READ_SKIPPED")
-            return 0, {}, b""
         response = _read_response(stream)
         print("RAW_HTTPS_RESPONSE_BYTES", len(response))
         header_end = response.find(b"\r\n\r\n")
@@ -206,10 +249,10 @@ def _post_rpc_and_get_result(webapp_url, payload):
         raise OSError("Apps Script did not issue a request ID")
     payload["request_id"] = request_id
     try:
-        status, _, _ = _https_request(
-            "POST", webapp_url, json.dumps(payload), skip_response_read=True
-        )
-        print("APPS_SCRIPT_POST_RESPONSE_READ_SKIPPED", status)
+        # With the patient _read_response this should now show 302 (Apps
+        # Script's redirect). The GET polling below still fetches the result.
+        status, _, _ = _https_request("POST", webapp_url, json.dumps(payload))
+        print("APPS_SCRIPT_POST_STATUS", status)
     except Exception as exc:
         # The POST may have completed server-side before the response was
         # dropped; polling below determines whether a result was stored.

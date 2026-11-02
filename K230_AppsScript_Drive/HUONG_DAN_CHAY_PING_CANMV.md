@@ -43,6 +43,13 @@ Phải cập nhật `Code.gs` trong Apps Script và triển khai phiên bản We
 
 ## Đọc kết quả
 
+Trên firmware CanMV, `read()` trả về `b''` cả khi hết thời gian chờ, khi bị reset và khi server đóng kết nối, và trả `None` khi lớp TLS chưa có dữ liệu. Vì vậy một lần đọc rỗng **không** có nghĩa là server đã trả lời xong. Script đọc tiếp cho tới khi nhận đủ header và body (theo `Content-Length` hoặc chunked), tối đa 30 giây cho mỗi yêu cầu.
+
+- `RAW_HTTPS_FIRST_BYTE_MS <ms>` — thời gian từ lúc bắt đầu đọc tới khi nhận byte phản hồi đầu tiên.
+- `RAW_HTTPS_EMPTY_READ <None hoặc b''> <ms>` — một lần đọc rỗng (in tối đa 5 dòng mỗi yêu cầu). Script vẫn tiếp tục đọc.
+- `RAW_HTTPS_READ_GAVE_UP <số lần> <ms>` — hết 30 giây mà phản hồi chưa đủ.
+- `APPS_SCRIPT_POST_STATUS 302` — K230 đã đọc được phản hồi POST. Nếu dòng này xuất hiện thì lỗi `bad status line: b''` cũ đã được khắc phục.
+- Khi báo kết quả, gửi **toàn bộ** các dòng `RAW_HTTPS_...` kèm số ms. Con số này cho biết lỗi do hết thời gian chờ (khoảng 20 000 ms), do kết nối bị reset (gần 0 ms với `b''`) hay chỉ là TLS chưa sẵn sàng (`None`).
 - `APPS_SCRIPT_PING_OK` — Apps Script đã trả lời qua GET polling và chấp nhận ping có token.
 - `APPS_SCRIPT_RESULT_PENDING ...` — script đang đợi Apps Script ghi kết quả vào cache.
 - `APPS_SCRIPT_PING_FAILED Apps Script did not issue a request ID` — kiểm tra đã dán `Code.gs` mới và triển khai đúng phiên bản Web app.
