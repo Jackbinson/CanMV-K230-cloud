@@ -2,7 +2,7 @@
 
 ## Bản mẫu này làm gì
 
-- Apps Script xác thực một mã thiết bị, tạo phiên tải lên tiếp tục được (resumable) và lưu kết quả tạm trong Script Cache để K230 đọc lại qua GET.
+- Apps Script xác thực một mã thiết bị, tạo phiên tải lên tiếp tục được (resumable) và lưu kết quả tạm trong Script Cache để K230 đọc lại qua GET. Có thể đặt một Cloudflare Worker relay trước Apps Script nếu CanMV không đọc được phản hồi trực tiếp.
 - K230 gửi các khối 256 KiB **trực tiếp tới Google Drive** qua HTTPS; Apps Script không nhận luồng MP4.
 - Gửi MP4 đã hoàn tất và JSON cùng tên từ `/data/recordings` vào thư mục Drive `K230_Clips`.
 - Giữ nguyên video trên thẻ. Tệp `drive_upload_state.json` chỉ ghi tên và ID Drive để tránh gửi lại tệp đã xong.
@@ -11,9 +11,9 @@
 
 - Web app Apps Script đã được triển khai. POST không token từ laptop trả HTTP 200 với `unauthorized`, đúng như thiết kế.
 - K230 đã kết nối Wi-Fi và lần POST thăm dò đã kích hoạt `doPost` trong Apps Script; lần thực thi được ghi nhận là hoàn tất.
-- K230 hiện gửi POST tới Apps Script nhưng không nhận được phản hồi HTTP (`HTTP bad status line: b''`). Bản sửa mới dùng GET lấy request ID, POST thao tác, rồi GET kết quả từ cache. Bản sửa này chưa được xác nhận trên camera thật.
+- Apps Script ghi nhận GET từ K230 hoàn tất, nhưng CanMV vẫn nhận 0 byte phản hồi HTTP. Worker relay đã được chuẩn bị để theo redirect và trả nội dung cuối; chưa được xác nhận trên camera thật.
 
-Đây vẫn là bản thử nghiệm. Thay `Code.gs` trong Apps Script bằng bản trong gói, lưu và triển khai phiên bản Web app mới trước khi chạy script ping. Chỉ thử tải một clip nhỏ sau khi ping mới hiện `APPS_SCRIPT_PING_OK`; không xem việc `doPost` chạy xong là bằng chứng video đã được tải lên.
+Đây vẫn là bản thử nghiệm. Thay `Code.gs` trong Apps Script bằng bản trong gói, lưu và triển khai phiên bản Web app mới. Nếu dùng Worker relay, cấu hình `webapp_url` trên thẻ thành URL Worker bí mật theo `cloudflare_worker/SETUP_VI.md`. Chỉ thử tải một clip nhỏ sau khi ping mới hiện `APPS_SCRIPT_PING_OK`; không xem việc `doPost` chạy xong là bằng chứng video đã được tải lên.
 
 ## Tạo Apps Script
 
@@ -41,7 +41,7 @@ Tạo bản sao của `drive_upload_config.example.json`, đổi tên thành:
 
 `/sdcard/recorder/drive_upload_config.json`
 
-Điền URL `/exec`, cùng `DEVICE_TOKEN` bạn vừa tạo. `recordings_dir` hiện khớp với cấu hình recorder của dự án là `/data/recordings`. Hãy giữ bí mật tệp cấu hình/token; ai có bản sao token có thể tải tệp lên Drive của bạn. Có thể thu hồi bằng cách đổi Script Property `DEVICE_TOKEN` và sửa cấu hình board.
+Điền URL Apps Script `/exec` hoặc URL Worker relay, cùng `DEVICE_TOKEN` bạn vừa tạo. `recordings_dir` hiện khớp với cấu hình recorder của dự án là `/data/recordings`. Hãy giữ bí mật tệp cấu hình/token; ai có bản sao token có thể tải tệp lên Drive của bạn. Có thể thu hồi bằng cách đổi Script Property `DEVICE_TOKEN` và sửa cấu hình board.
 
 Chép `k230_drive_upload.py` vào board rồi chạy nó **sau khi đã dừng phiên quay**. Bản mẫu cố ý không được gắn vào vòng lặp quay: tải 30 MB qua 4G có thể mất lâu hơn khoảng nghỉ giữa hai clip và làm mất cảnh giao thông. Tệp MP4 đang ghi dở có đuôi `.partial.mp4` và sẽ bị bỏ qua.
 

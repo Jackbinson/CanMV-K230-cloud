@@ -256,8 +256,8 @@ def upload_finalized_recordings():
     cfg = _read_json(CONFIG_PATH)
     if not cfg:
         raise OSError("Missing config: " + CONFIG_PATH)
-    if not cfg.get("webapp_url", "").startswith("https://script.google.com/"):
-        raise ValueError("Set webapp_url to your deployed Apps Script /exec URL")
+    if not cfg.get("webapp_url", "").startswith("https://"):
+        raise ValueError("Set webapp_url to the HTTPS Apps Script or relay endpoint")
     token = cfg.get("device_token", "")
     if len(token) < 32 or "PASTE_" in token:
         raise ValueError("Set device_token to your own random secret")

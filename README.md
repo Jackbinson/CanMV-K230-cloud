@@ -4,9 +4,11 @@ This repository contains a Google Apps Script endpoint and CanMV MicroPython fil
 
 ## Current verification status
 
-As of 2026-11-02, a token-free POST from the laptop reaches the Apps Script web app and returns `200` with `unauthorized`, as expected. The K230 connects to Wi-Fi and its POST triggers a completed `doPost` execution, but CanMV receives no HTTP response bytes for that POST. A GET-polling workaround has been added to `Code.gs` and the CanMV scripts; it requires replacing `Code.gs` and deploying a new web-app version. The workaround and video upload have **not** been verified on the physical board.
+As of 2026-11-02, Apps Script reports completed `doGet` executions from the K230, but CanMV receives no HTTP status bytes from the Apps Script web-app route. The direct Apps Script path is therefore not usable on this board yet. A Cloudflare Worker relay has been prepared to follow Google's response redirects and return the final response to the K230. The relay and video upload have **not** been verified on the physical board.
 
 Start with [`K230_AppsScript_Drive/HUONG_DAN.md`](K230_AppsScript_Drive/HUONG_DAN.md) and [`K230_AppsScript_Drive/HUONG_DAN_CHAY_PING_CANMV.md`](K230_AppsScript_Drive/HUONG_DAN_CHAY_PING_CANMV.md).
+
+To try the relay, see [`cloudflare_worker/SETUP_VI.md`](cloudflare_worker/SETUP_VI.md).
 
 ## Secrets
 
