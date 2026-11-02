@@ -1,0 +1,12 @@
+# Local device configuration and credentials
+**/drive_upload_config.json
+**/wifi_config.json
+**/wifi_config.local.json
+**/config.local.json
+.env
+
+# Generated recordings and Python cache
+*.mp4
+*.partial.mp4
+__pycache__/
+*.py[cod]

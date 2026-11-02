@@ -1,0 +1,7 @@
+{
+  "webapp_url": "https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec",
+  "device_token": "PASTE_A_RANDOM_SECRET_OF_AT_LEAST_32_CHARACTERS_HERE",
+  "recordings_dir": "/data/recordings",
+  "chunk_bytes": 262144,
+  "max_file_bytes": 268435456
+}
