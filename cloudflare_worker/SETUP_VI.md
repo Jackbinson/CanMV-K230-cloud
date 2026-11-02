@@ -1,5 +1,11 @@
 # Relay miễn phí cho CanMV K230 → Apps Script
 
+## Cập nhật Apps Script trước
+
+Phản hồi PowerShell hiện tại là `200 OK` với `Content-Type: text/html`; đó là trang HTML do `HtmlService` tạo, trong đó JSON chỉ được nhúng vào trang. API cần trả JSON thuần. Mở `K230_AppsScript_Drive/Code.gs` trong repo, chép toàn bộ nội dung vào tệp `Code.gs` của Apps Script, rồi chọn **Triển khai → Quản lý các tùy chọn triển khai → Chỉnh sửa → Phiên bản mới → Triển khai**. Không sửa bằng cách chỉ chạy hàm trong trình biên tập; phải triển khai phiên bản web app mới.
+
+Sau khi triển khai, khi kiểm tra trực tiếp bằng PowerShell, lệnh `curl.exe -i -L "<web-app-url>/exec?action=nonce"` cần trả nội dung JSON thuần, ví dụ `{"ok":true,"request_id":"..."}`. Lệnh không có `-L` có thể chỉ hiện phản hồi chuyển hướng của `ContentService`; Worker sẽ tự theo chuyển hướng này.
+
 ## Vì sao dùng relay
 
 Apps Script ghi nhận K230 gọi `doGet`, nhưng firmware CanMV không đọc được dòng HTTP trả về. Worker nhận yêu cầu của camera, gọi URL Apps Script từ máy chủ Cloudflare, theo redirect của Google rồi trả kết quả cuối cho camera.

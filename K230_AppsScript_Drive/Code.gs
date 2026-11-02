@@ -23,18 +23,19 @@ function doGet(e) {
   if (action === "nonce") {
     const requestId = Utilities.getUuid().replace(/-/g, "").toLowerCase();
     cache.put(pendingKey_(requestId), "1", RPC_TTL_SECONDS);
-    return htmlJson_({ ok: true, request_id: requestId });
+    return json_({ ok: true, request_id: requestId });
   }
 
   if (action === "result") {
     const requestId = String(parameters.id || "");
-    if (!validRequestId_(requestId)) return htmlJson_({ ok: false, error: "invalid_request_id" });
+    if (!validRequestId_(requestId)) return json_({ ok: false, error: "invalid_request_id" });
     const resultText = cache.get(resultKey_(requestId));
-    if (!resultText) return htmlJson_({ ok: false, pending: true });
-    return HtmlService.createHtmlOutput(resultText).setTitle("K230 API");
+    if (!resultText) return json_({ ok: false, pending: true });
+    return ContentService.createTextOutput(resultText)
+      .setMimeType(ContentService.MimeType.JSON);
   }
 
-  return htmlJson_({ ok: false, error: "unsupported_get_action" });
+  return json_({ ok: false, error: "unsupported_get_action" });
 }
 
 function doPost(e) {
@@ -188,10 +189,4 @@ function headerValue_(headers, wantedName) {
 function json_(value) {
   return ContentService.createTextOutput(JSON.stringify(value))
     .setMimeType(ContentService.MimeType.JSON);
-}
-
-function htmlJson_(value) {
-  // GET replies use HtmlService rather than ContentService to avoid its
-  // one-time script.googleusercontent.com redirect on this CanMV client.
-  return HtmlService.createHtmlOutput(JSON.stringify(value)).setTitle("K230 API");
 }
