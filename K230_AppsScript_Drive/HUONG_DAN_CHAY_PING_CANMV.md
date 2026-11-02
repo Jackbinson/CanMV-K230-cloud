@@ -35,18 +35,18 @@ Tệp `k230_drive_ping_restart.py` chỉ gửi yêu cầu `ping` tới Apps Scri
 
 ## Cơ chế kiểm tra kết nối
 
-`k230_check_http_modules.py` chỉ kiểm tra module có sẵn, **không kết nối mạng, không đọc token và không gửi dữ liệu**. Bản ping dùng TLS socket để đọc status và theo redirect của Apps Script, vì API `requests` trong firmware không hỗ trợ `allow_redirects`. Trước khi ping, script gọi `/sdcard/recorder/wifi_client.py` để kết nối Wi-Fi bằng cấu hình đã lưu trên thẻ.
+`k230_check_http_modules.py` chỉ kiểm tra module có sẵn, **không kết nối mạng, không đọc token và không gửi dữ liệu**. Bản ping mới dùng TLS socket trực tiếp. Vì firmware nhận POST ở Apps Script nhưng không đọc được phản hồi POST, script xin một request ID ngẫu nhiên bằng GET, gửi POST có token, rồi đọc kết quả bằng GET. Request ID có thời hạn ngắn; token không nằm trong URL. Trước khi ping, script gọi `/sdcard/recorder/wifi_client.py` để kết nối Wi-Fi bằng cấu hình đã lưu trên thẻ.
 
-Script gửi một POST thăm dò **không có token** trước. Chỉ khi nhận đúng phản hồi `unauthorized` từ Apps Script, script mới gửi ping có `device_token`. Nếu POST thăm dò không nhận được status HTTP thì token không được gửi trong lần chạy đó.
+Phải cập nhật `Code.gs` trong Apps Script và triển khai phiên bản Web app mới trước khi chạy script này. Nếu vẫn dùng phiên bản cũ, các yêu cầu `action=nonce` và `action=result` sẽ báo `unsupported_get_action`.
 
-**Giới hạn bảo mật:** firmware `requests` dùng `CERT_NONE`; bản ping hiện giữ cùng chế độ TLS này để tương thích. Kết nối được mã hóa nhưng chưa xác minh chứng thư máy chủ. Chỉ dùng cho phép ping chẩn đoán; trước khi bật gửi dữ liệu tự động, cần cấu hình CA tin cậy và xác minh chứng thư.
+**Giới hạn bảo mật:** bản ping dùng TLS với `CERT_NONE` để tương thích firmware. Kết nối được mã hóa nhưng chưa xác minh chứng thư máy chủ. Không gửi video hoặc dữ liệu nhạy cảm qua bản thử nghiệm này.
 
 ## Đọc kết quả
 
-- `APPS_SCRIPT_PING_OK` — Apps Script đã trả lời và chấp nhận ping.
-- `APPS_SCRIPT_PREFLIGHT_OK no-token unauthorized response` — endpoint đã trả lời đúng; script tiếp tục ping có token.
-- `APPS_SCRIPT_PING_FAILED ...` trước dòng preflight — lỗi ở bước thăm dò; lần chạy này chưa gửi token.
-- `APPS_SCRIPT_PING_FAILED ...` sau dòng preflight — lỗi trong ping có token; giữ nguyên nguyên văn phần lỗi để kiểm tra tiếp.
+- `APPS_SCRIPT_PING_OK` — Apps Script đã trả lời qua GET polling và chấp nhận ping có token.
+- `APPS_SCRIPT_RESULT_PENDING ...` — script đang đợi Apps Script ghi kết quả vào cache.
+- `APPS_SCRIPT_PING_FAILED Apps Script did not issue a request ID` — kiểm tra đã dán `Code.gs` mới và triển khai đúng phiên bản Web app.
+- `APPS_SCRIPT_PING_FAILED ...` — giữ nguyên toàn bộ log để xác định lỗi ở bước lấy ID, gửi POST hay đọc kết quả GET.
 - `FileNotFoundError` — thiếu file cấu hình tại `/sdcard/recorder/drive_upload_config.json`.
 - Lỗi khóa `webapp_url` hoặc `device_token` — tên khóa trong JSON chưa đúng hoặc bị thiếu.
 - Timeout/lỗi mạng — kiểm tra Wi-Fi, IP và Internet trên mạng đang dùng.

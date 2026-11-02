@@ -2,7 +2,7 @@
 
 ## Bản mẫu này làm gì
 
-- Apps Script xác thực một mã thiết bị, tạo phiên tải lên tiếp tục được (resumable) và trả về URL tạm.
+- Apps Script xác thực một mã thiết bị, tạo phiên tải lên tiếp tục được (resumable) và lưu kết quả tạm trong Script Cache để K230 đọc lại qua GET.
 - K230 gửi các khối 256 KiB **trực tiếp tới Google Drive** qua HTTPS; Apps Script không nhận luồng MP4.
 - Gửi MP4 đã hoàn tất và JSON cùng tên từ `/data/recordings` vào thư mục Drive `K230_Clips`.
 - Giữ nguyên video trên thẻ. Tệp `drive_upload_state.json` chỉ ghi tên và ID Drive để tránh gửi lại tệp đã xong.
@@ -11,9 +11,9 @@
 
 - Web app Apps Script đã được triển khai. POST không token từ laptop trả HTTP 200 với `unauthorized`, đúng như thiết kế.
 - K230 đã kết nối Wi-Fi và lần POST thăm dò đã kích hoạt `doPost` trong Apps Script; lần thực thi được ghi nhận là hoàn tất.
-- K230 hiện vẫn nhận `HTTP bad status line: b''` khi đọc phản hồi POST. Vì vậy chưa xác nhận được ping có token hoặc tải video lên Drive.
+- K230 hiện gửi POST tới Apps Script nhưng không nhận được phản hồi HTTP (`HTTP bad status line: b''`). Bản sửa mới dùng GET lấy request ID, POST thao tác, rồi GET kết quả từ cache. Bản sửa này chưa được xác nhận trên camera thật.
 
-Đây vẫn là bản thử nghiệm. Chỉ thử tải một clip nhỏ sau khi xử lý xong lỗi phản hồi HTTPS; không xem việc `doPost` chạy xong là bằng chứng video đã được tải lên.
+Đây vẫn là bản thử nghiệm. Thay `Code.gs` trong Apps Script bằng bản trong gói, lưu và triển khai phiên bản Web app mới trước khi chạy script ping. Chỉ thử tải một clip nhỏ sau khi ping mới hiện `APPS_SCRIPT_PING_OK`; không xem việc `doPost` chạy xong là bằng chứng video đã được tải lên.
 
 ## Tạo Apps Script
 
@@ -30,6 +30,8 @@
    Chép chuỗi đó tạm vào nơi riêng để lát nữa nhập vào tệp cấu hình board. Không gửi token qua chat.
 5. Chọn **Deploy → New deployment → Web app**. Đặt **Execute as: Me**. Để board gọi được khi đang ở xa, chọn quyền truy cập **Anyone** nếu tài khoản cho phép. Google có thể yêu cầu bạn duyệt quyền Drive và URL Fetch; chấp thuận trong tài khoản của chính bạn.
 6. Sao chép URL kết thúc bằng `/exec`. Không dùng URL `/dev`.
+
+Sau khi cập nhật `Code.gs`, cần triển khai một phiên bản Web app mới để các hàm `doGet` (`action=nonce`, `action=result`) có hiệu lực. Giữ URL `/exec` trong cấu hình board.
 
 Lần đầu gọi `init`, script sẽ tạo thư mục `K230_Clips` trong Drive của tài khoản triển khai. Script dùng OAuth của chủ tài khoản; không đưa OAuth client secret hay refresh token xuống camera. Nếu tổ chức Google chặn Web App cho người dùng ẩn danh, endpoint này không thể dùng từ board cho tới khi chính sách tài khoản cho phép. Apps Script web app có thể bị giới hạn quyền `Anyone` tùy loại tài khoản/chính sách Workspace.
 

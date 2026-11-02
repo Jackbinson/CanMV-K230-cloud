@@ -23,7 +23,9 @@ def _read_response(stream, limit=8192):
     """Collect one small HTTP response using the CanMV HTTPS read pattern."""
     data = b""
     while True:
-        chunk = stream.read(512)
+        # Match Kendryte's CanMV HTTPS example: read until the server closes
+        # the connection (the request includes Connection: close).
+        chunk = stream.read()
         if not chunk:
             return data
         data += chunk
@@ -60,7 +62,8 @@ def _write_all(stream, data):
         offset += written
 
 
-def _https_request(method, url, body=None, read_body=True):
+def _https_request(method, url, body=None, read_body=True,
+                   skip_response_read=False):
     if not url.startswith("https://"):
         raise ValueError("Only HTTPS redirects are accepted")
     rest = url[8:]
@@ -113,6 +116,9 @@ def _https_request(method, url, body=None, read_body=True):
             pass
         print("RAW_HTTPS_SENT_BYTES", len(request_bytes))
 
+        if skip_response_read:
+            print("RAW_HTTPS_RESPONSE_READ_SKIPPED")
+            return 0, {}, b""
         response = _read_response(stream)
         print("RAW_HTTPS_RESPONSE_BYTES", len(response))
         header_end = response.find(b"\r\n\r\n")
@@ -164,25 +170,60 @@ def _resolve_location(base_url, location):
     raise OSError("Unsupported Apps Script redirect format")
 
 
-def _post_json_follow_redirects(start_url, payload):
+def _append_query(url, query):
+    return url + ("&" if "?" in url else "?") + query
+
+
+def _get_json_follow_redirects(start_url):
     current_url = start_url
-    status, headers, body = _https_request("POST", current_url, payload)
+    status, headers, body = _https_request("GET", current_url)
     redirects = 0
     while status in (301, 302, 303, 307, 308) and redirects < 3:
         location = _header(headers, "Location")
         if not location:
             raise OSError("Apps Script redirect had no Location header")
-        method = "GET" if status in (301, 302, 303) else "POST"
         location = _resolve_location(current_url, location)
-        status, headers, body = _https_request(
-            method, location, None if method == "GET" else payload
-        )
+        status, headers, body = _https_request("GET", location)
         current_url = location
         redirects += 1
         print("APPS_SCRIPT_REDIRECT_STATUS", status)
     if status in (301, 302, 303, 307, 308):
         raise OSError("Too many Apps Script redirects")
-    return status, body
+    if status < 200 or status >= 300:
+        raise OSError("Apps Script GET HTTP " + str(status))
+    return json.loads(body.decode("utf-8"))
+
+
+def _post_rpc_and_get_result(webapp_url, payload):
+    # Apps Script's POST response is not reaching this CanMV firmware, even
+    # though Executions confirms doPost ran. Use a short-lived request ID and
+    # fetch the stored result through GET, which works on this board.
+    nonce_result = _get_json_follow_redirects(
+        _append_query(webapp_url, "action=nonce")
+    )
+    request_id = nonce_result.get("request_id", "")
+    if not nonce_result.get("ok") or len(request_id) != 32:
+        raise OSError("Apps Script did not issue a request ID")
+    payload["request_id"] = request_id
+    try:
+        status, _, _ = _https_request(
+            "POST", webapp_url, json.dumps(payload), skip_response_read=True
+        )
+        print("APPS_SCRIPT_POST_RESPONSE_READ_SKIPPED", status)
+    except Exception as exc:
+        # The POST may have completed server-side before the response was
+        # dropped; polling below determines whether a result was stored.
+        print("APPS_SCRIPT_POST_READ_NOTE", str(exc))
+
+    result_url = _append_query(webapp_url, "action=result&id=" + request_id)
+    last_result = None
+    for attempt in range(12):
+        last_result = _get_json_follow_redirects(result_url)
+        if not last_result.get("pending"):
+            return last_result
+        print("APPS_SCRIPT_RESULT_PENDING", attempt + 1)
+        time.sleep(1)
+    raise OSError("Apps Script result poll timed out: " + str(last_result))
 
 
 def _ping():
@@ -196,28 +237,8 @@ def _ping():
         raise OSError("Wi-Fi has no active connection")
     webapp_url = config["webapp_url"]
 
-    # Compare a token-free GET on the same Google host before the POST probe.
-    host_status, _, _ = _https_request(
-        "GET", "https://script.google.com/", None, read_body=False
-    )
-    print("SCRIPT_HOST_GET_STATUS", host_status)
-
-    # Verify that Apps Script answers before sending the device token.
-    probe_payload = json.dumps({"action": "ping"})
-    status, body = _post_json_follow_redirects(webapp_url, probe_payload)
-    if status < 200 or status >= 300:
-        raise OSError("Apps Script preflight HTTP " + str(status))
-    probe_result = json.loads(body.decode("utf-8"))
-    if probe_result.get("error") != "unauthorized":
-        raise OSError("Apps Script preflight response was unexpected")
-    print("APPS_SCRIPT_PREFLIGHT_OK no-token unauthorized response")
-
-    payload = json.dumps({"action": "ping", "token": config["device_token"]})
-    status, body = _post_json_follow_redirects(webapp_url, payload)
-    print("APPS_SCRIPT_HTTP_STATUS", status)
-    if status < 200 or status >= 300:
-        raise OSError("Apps Script HTTP " + str(status))
-    result = json.loads(body.decode("utf-8"))
+    payload = {"action": "ping", "token": config["device_token"]}
+    result = _post_rpc_and_get_result(webapp_url, payload)
     if not result.get("ok"):
         raise OSError("Apps Script rejected ping: " + str(result.get("error", "unknown")))
     print("APPS_SCRIPT_PING_OK", result.get("service", ""))

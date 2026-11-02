@@ -7,7 +7,10 @@ next clip if they are added inside the recorder's capture loop.
 import os
 import time
 import ujson as json
-import urequests
+try:
+    import requests
+except ImportError:
+    import urequests as requests
 
 CONFIG_PATH = "/sdcard/recorder/drive_upload_config.json"
 STATE_PATH = "/sdcard/recorder/drive_upload_state.json"
@@ -73,21 +76,36 @@ def _response_text(response):
         return ""
 
 
-def _post_webapp(url, payload):
-    body = json.dumps(payload)
-    response = urequests.post(url, data=body, headers={"Content-Type": "application/json"})
-    # Apps Script ContentService can return a 302 to a temporary
-    # script.googleusercontent.com URL. Follow that response as GET. Some
-    # urequests builds follow redirects internally; in that case status is
-    # already 200 and this branch is skipped.
+def _append_query(url, query):
+    return url + ("&" if "?" in url else "?") + query
+
+
+def _follow_get_redirects(response, base_url, max_redirects=3):
     redirects = 0
-    while response.status_code in (301, 302, 303, 307, 308) and redirects < 3:
+    current_url = base_url
+    while response.status_code in (301, 302, 303, 307, 308) and redirects < max_redirects:
         location = _header(response.headers, "Location")
         _close(response)
         if not location:
             raise OSError("Apps Script redirect had no Location header")
-        response = urequests.get(location)
+        if location.startswith("/"):
+            host_start = current_url.find("//") + 2
+            host_end = current_url.find("/", host_start)
+            host = current_url[host_start:] if host_end < 0 else current_url[host_start:host_end]
+            location = "https://" + host + location
+        elif location.startswith("//"):
+            location = "https:" + location
+        response = requests.get(location)
+        current_url = location
         redirects += 1
+    if response.status_code in (301, 302, 303, 307, 308):
+        _close(response)
+        raise OSError("Too many Apps Script redirects")
+    return response
+
+
+def _get_webapp_json(url):
+    response = _follow_get_redirects(requests.get(url), url)
     status = response.status_code
     text = _response_text(response)
     _close(response)
@@ -97,13 +115,46 @@ def _post_webapp(url, payload):
         result = json.loads(text)
     except Exception:
         raise OSError("Apps Script returned invalid JSON")
-    if not result.get("ok"):
-        raise OSError("Apps Script error: " + str(result.get("error", "unknown")))
     return result
 
 
+def _post_webapp(url, payload):
+    # Fetching an Apps Script TextOutput after POST fails on this CanMV build:
+    # doPost executes, but its HTTP response is empty. Obtain the result using
+    # GET with a short-lived ID so no device token appears in the URL.
+    nonce_result = _get_webapp_json(_append_query(url, "action=nonce"))
+    request_id = nonce_result.get("request_id", "")
+    if not nonce_result.get("ok") or len(request_id) != 32:
+        raise OSError("Apps Script did not issue a request ID")
+    payload["request_id"] = request_id
+
+    try:
+        response = requests.post(
+            url,
+            data=json.dumps(payload),
+            headers={"Content-Type": "application/json"}
+        )
+        _close(response)
+    except Exception as exc:
+        # Continue to poll: Apps Script may have completed the POST before its
+        # response was dropped by the board's HTTP/TLS client.
+        print("APPS_SCRIPT_POST_READ_NOTE", str(exc))
+
+    result_url = _append_query(url, "action=result&id=" + request_id)
+    last_result = None
+    for attempt in range(12):
+        last_result = _get_webapp_json(result_url)
+        if not last_result.get("pending"):
+            if not last_result.get("ok"):
+                raise OSError("Apps Script error: " + str(last_result.get("error", "unknown")))
+            return last_result
+        print("APPS_SCRIPT_RESULT_PENDING", attempt + 1)
+        time.sleep(1)
+    raise OSError("Apps Script result poll timed out: " + str(last_result))
+
+
 def _read_drive_offset(upload_url, total):
-    response = urequests.put(upload_url, data=b"", headers={
+    response = requests.put(upload_url, data=b"", headers={
         "Content-Length": "0",
         "Content-Range": "bytes */" + str(total)
     })
@@ -142,7 +193,7 @@ def _upload_resumable(path, upload_url, total, chunk_bytes):
             end = offset + len(data) - 1
             response = None
             try:
-                response = urequests.put(upload_url, data=data, headers={
+                response = requests.put(upload_url, data=data, headers={
                     "Content-Length": str(len(data)),
                     "Content-Range": "bytes " + str(offset) + "-" + str(end) + "/" + str(total),
                     "Content-Type": "application/octet-stream"

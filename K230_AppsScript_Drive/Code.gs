@@ -10,79 +10,134 @@
 const DRIVE_API = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD_API = "https://www.googleapis.com/upload/drive/v3/files";
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
+const RPC_TTL_SECONDS = 600;
+
+// K230 obtains a short-lived random request ID with GET, sends the operation
+// with POST, then retrieves the result with GET. This avoids depending on the
+// K230 receiving Apps Script's POST response directly.
+function doGet(e) {
+  const parameters = e && e.parameter ? e.parameter : {};
+  const action = String(parameters.action || "");
+  const cache = CacheService.getScriptCache();
+
+  if (action === "nonce") {
+    const requestId = Utilities.getUuid().replace(/-/g, "").toLowerCase();
+    cache.put(pendingKey_(requestId), "1", RPC_TTL_SECONDS);
+    return json_({ ok: true, request_id: requestId });
+  }
+
+  if (action === "result") {
+    const requestId = String(parameters.id || "");
+    if (!validRequestId_(requestId)) return json_({ ok: false, error: "invalid_request_id" });
+    const resultText = cache.get(resultKey_(requestId));
+    if (!resultText) return json_({ ok: false, pending: true });
+    return ContentService.createTextOutput(resultText)
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  return json_({ ok: false, error: "unsupported_get_action" });
+}
 
 function doPost(e) {
+  let requestId = "";
+  let result;
   try {
     if (!e || !e.postData || !e.postData.contents) {
-      return json_({ ok: false, error: "empty_request" });
+      result = { ok: false, error: "empty_request" };
+    } else {
+      const request = JSON.parse(e.postData.contents);
+      requestId = String(request.request_id || "");
+      result = handleRequest_(request);
     }
-
-    const request = JSON.parse(e.postData.contents);
-    if (!authorized_(request.token)) {
-      return json_({ ok: false, error: "unauthorized" });
-    }
-
-    if (request.action === "ping") {
-      return json_({ ok: true, service: "k230-drive-upload" });
-    }
-    if (request.action !== "init") {
-      return json_({ ok: false, error: "unsupported_action" });
-    }
-
-    const name = safeFileName_(request.name);
-    const cameraId = String(request.camera_id || "");
-    const size = Number(request.size);
-    if (!/^[A-Za-z0-9_-]{1,32}$/.test(cameraId)) {
-      return json_({ ok: false, error: "invalid_camera_id" });
-    }
-    if (!Number.isSafeInteger(size) || size < 1 || size > MAX_FILE_BYTES) {
-      return json_({ ok: false, error: "invalid_file_size" });
-    }
-
-    const folderId = getOrCreateFolder_();
-    const mimeType = name.toLowerCase().endsWith(".mp4")
-      ? "video/mp4"
-      : "application/json";
-    const metadata = {
-      name: name,
-      mimeType: mimeType,
-      parents: [folderId],
-      appProperties: {
-        camera_id: cameraId,
-        source: "canmv-k230"
-      }
-    };
-
-    const response = UrlFetchApp.fetch(
-      DRIVE_UPLOAD_API + "?uploadType=resumable&fields=id,name,mimeType",
-      {
-        method: "post",
-        contentType: "application/json",
-        payload: JSON.stringify(metadata),
-        headers: {
-          Authorization: "Bearer " + ScriptApp.getOAuthToken(),
-          "X-Upload-Content-Type": mimeType,
-          "X-Upload-Content-Length": String(size)
-        },
-        muteHttpExceptions: true
-      }
-    );
-
-    const code = response.getResponseCode();
-    const headers = response.getAllHeaders();
-    const uploadUrl = headerValue_(headers, "Location");
-    if (code < 200 || code >= 300 || !uploadUrl) {
-      console.error("Drive upload-session creation failed; HTTP " + code);
-      return json_({ ok: false, error: "drive_session_failed", http_status: code });
-    }
-
-    // This URL is a temporary bearer capability. Return it only after token
-    // validation and never write it to logs or Script Properties.
-    return json_({ ok: true, upload_url: uploadUrl, name: name, size: size });
   } catch (err) {
     console.error("Request failed: " + String(err));
-    return json_({ ok: false, error: "server_error" });
+    result = { ok: false, error: "server_error" };
   }
+
+  if (validRequestId_(requestId)) {
+    const cache = CacheService.getScriptCache();
+    const pendingKey = pendingKey_(requestId);
+    if (cache.get(pendingKey) === "1") {
+      cache.remove(pendingKey);
+      cache.put(resultKey_(requestId), JSON.stringify(result), RPC_TTL_SECONDS);
+      return json_({ ok: true, queued: true });
+    }
+  }
+  return json_(result);
+}
+
+function handleRequest_(request) {
+  if (!authorized_(request.token)) return { ok: false, error: "unauthorized" };
+
+  if (request.action === "ping") {
+    return { ok: true, service: "k230-drive-upload" };
+  }
+  if (request.action !== "init") {
+    return { ok: false, error: "unsupported_action" };
+  }
+
+  const name = safeFileName_(request.name);
+  const cameraId = String(request.camera_id || "");
+  const size = Number(request.size);
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(cameraId)) {
+    return { ok: false, error: "invalid_camera_id" };
+  }
+  if (!Number.isSafeInteger(size) || size < 1 || size > MAX_FILE_BYTES) {
+    return { ok: false, error: "invalid_file_size" };
+  }
+
+  const folderId = getOrCreateFolder_();
+  const mimeType = name.toLowerCase().endsWith(".mp4")
+    ? "video/mp4"
+    : "application/json";
+  const metadata = {
+    name: name,
+    mimeType: mimeType,
+    parents: [folderId],
+    appProperties: {
+      camera_id: cameraId,
+      source: "canmv-k230"
+    }
+  };
+
+  const response = UrlFetchApp.fetch(
+    DRIVE_UPLOAD_API + "?uploadType=resumable&fields=id,name,mimeType",
+    {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(metadata),
+      headers: {
+        Authorization: "Bearer " + ScriptApp.getOAuthToken(),
+        "X-Upload-Content-Type": mimeType,
+        "X-Upload-Content-Length": String(size)
+      },
+      muteHttpExceptions: true
+    }
+  );
+
+  const code = response.getResponseCode();
+  const headers = response.getAllHeaders();
+  const uploadUrl = headerValue_(headers, "Location");
+  if (code < 200 || code >= 300 || !uploadUrl) {
+    console.error("Drive upload-session creation failed; HTTP " + code);
+    return { ok: false, error: "drive_session_failed", http_status: code };
+  }
+
+  // This URL is a temporary bearer capability. It is kept in short-lived
+  // Script Cache and returned only to the caller that holds the request ID.
+  return { ok: true, upload_url: uploadUrl, name: name, size: size };
+}
+
+function validRequestId_(requestId) {
+  return /^[a-f0-9]{32}$/.test(String(requestId || ""));
+}
+
+function pendingKey_(requestId) {
+  return "K230_PENDING_" + requestId;
+}
+
+function resultKey_(requestId) {
+  return "K230_RESULT_" + requestId;
 }
 
 function authorized_(candidate) {
