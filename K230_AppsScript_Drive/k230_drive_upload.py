@@ -74,6 +74,23 @@ def _close(response):
         pass
 
 
+def _response_text(response):
+    """Read a requests response body as text across CanMV requests builds."""
+    try:
+        value = response.text
+    except Exception:
+        try:
+            value = response.content
+        except Exception:
+            value = b""
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            return value.decode("latin-1")
+    return str(value)
+
+
 def _append_query(url, query):
     return url + ("&" if "?" in url else "?") + query
 
