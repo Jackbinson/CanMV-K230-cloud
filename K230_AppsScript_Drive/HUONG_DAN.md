@@ -43,7 +43,7 @@ Tạo bản sao của `drive_upload_config.example.json`, đổi tên thành:
 
 Điền URL Apps Script `/exec` hoặc URL Worker relay, cùng `DEVICE_TOKEN` bạn vừa tạo. `recordings_dir` hiện khớp với cấu hình recorder của dự án là `/data/recordings`. Hãy giữ bí mật tệp cấu hình/token; ai có bản sao token có thể tải tệp lên Drive của bạn. Có thể thu hồi bằng cách đổi Script Property `DEVICE_TOKEN` và sửa cấu hình board.
 
-Chép `k230_drive_upload.py` vào board rồi chạy nó **sau khi đã dừng phiên quay**. Bản mẫu cố ý không được gắn vào vòng lặp quay: tải 30 MB qua 4G có thể mất lâu hơn khoảng nghỉ giữa hai clip và làm mất cảnh giao thông. Tệp MP4 đang ghi dở có đuôi `.partial.mp4` và sẽ bị bỏ qua.
+Chép `k230_drive_upload.py` vào board rồi chạy nó **sau khi đã dừng phiên quay**. Uploader bật/kết nối Wi-Fi bằng `/sdcard/recorder/wifi_client.py`, cùng helper mà script ping dùng; nếu thiếu file này, chép `K230_Recorder_SD/recorder/wifi_client.py` vào `/sdcard/recorder/`. Bản mẫu cố ý không được gắn vào vòng lặp quay: tải 30 MB qua 4G có thể mất lâu hơn khoảng nghỉ giữa hai clip và làm mất cảnh giao thông. Tệp MP4 đang ghi dở có đuôi `.partial.mp4` và sẽ bị bỏ qua.
 
 ## Giới hạn cần biết
 

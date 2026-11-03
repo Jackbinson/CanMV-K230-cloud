@@ -5,6 +5,7 @@ Run it only after recording has stopped, because network uploads can delay the
 next clip if they are added inside the recorder's capture loop.
 """
 import os
+import sys
 import time
 import ujson as json
 try:
@@ -261,6 +262,19 @@ def upload_finalized_recordings():
     token = cfg.get("device_token", "")
     if len(token) < 32 or "PASTE_" in token:
         raise ValueError("Set device_token to your own random secret")
+
+    # The recorder and ping script use the saved SD-card credentials, but this
+    # uploader runs as a separate IDE script and must ensure STA is active too.
+    recorder_path = "/sdcard/recorder"
+    if recorder_path not in sys.path:
+        sys.path.insert(0, recorder_path)
+    try:
+        from wifi_client import ensure_wifi_connected
+    except Exception as exc:
+        raise OSError("Wi-Fi helper unavailable: " + str(exc))
+    if not ensure_wifi_connected(timeout=20):
+        raise OSError("Wi-Fi has no active connection")
+
     directory = cfg.get("recordings_dir", "/data/recordings")
     camera_id = cfg.get("camera_id", "CAM01")
     if not _is_directory(directory):
