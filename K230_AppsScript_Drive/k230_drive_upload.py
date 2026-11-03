@@ -12,6 +12,10 @@ try:
     import requests
 except ImportError:
     import urequests as requests
+try:
+    import usocket as socket
+except ImportError:
+    import socket
 
 CONFIG_PATH = "/sdcard/recorder/drive_upload_config.json"
 STATE_PATH = "/sdcard/recorder/drive_upload_state.json"
@@ -70,53 +74,197 @@ def _close(response):
         pass
 
 
-def _response_text(response):
-    try:
-        return response.text
-    except Exception:
-        return ""
-
-
 def _append_query(url, query):
     return url + ("&" if "?" in url else "?") + query
 
 
-def _follow_get_redirects(response, base_url, max_redirects=3):
-    redirects = 0
-    current_url = base_url
-    while response.status_code in (301, 302, 303, 307, 308) and redirects < max_redirects:
-        location = _header(response.headers, "Location")
-        _close(response)
-        if not location:
-            raise OSError("Apps Script redirect had no Location header")
-        if location.startswith("/"):
-            host_start = current_url.find("//") + 2
-            host_end = current_url.find("/", host_start)
-            host = current_url[host_start:] if host_end < 0 else current_url[host_start:host_end]
-            location = "https://" + host + location
-        elif location.startswith("//"):
-            location = "https:" + location
-        response = requests.get(location)
-        current_url = location
-        redirects += 1
-    if response.status_code in (301, 302, 303, 307, 308):
-        _close(response)
-        raise OSError("Too many Apps Script redirects")
-    return response
+def _response_complete(data):
+    """Return True when HTTP framing says the whole response has arrived."""
+    header_end = data.find(b"\r\n\r\n")
+    if header_end < 0:
+        return False
+    head = data[:header_end].lower()
+    body = data[header_end + 4:]
+    if b"transfer-encoding: chunked" in head:
+        return body.endswith(b"0\r\n\r\n")
+    marker = b"\r\ncontent-length:"
+    start = head.find(marker)
+    if start < 0:
+        return None
+    start += len(marker)
+    end = head.find(b"\r\n", start)
+    if end < 0:
+        end = len(head)
+    return len(body) >= int(head[start:end].strip())
+
+
+def _read_http_response(stream, limit=16384, wait_ms=30000):
+    # CanMV may return None or b'' before the HTTP response arrives. An empty
+    # read is not treated as end-of-response when headers declare a body size.
+    data = b""
+    empty_reads = 0
+    started = time.ticks_ms()
+    while True:
+        chunk = stream.read(512)
+        elapsed = time.ticks_diff(time.ticks_ms(), started)
+        if chunk:
+            if not data:
+                print("UPLOAD_HTTP_FIRST_BYTE_MS", elapsed)
+            data += chunk
+            if len(data) > limit:
+                raise OSError("HTTP response exceeded upload control limit")
+            if _response_complete(data):
+                return data
+            continue
+        empty_reads += 1
+        if empty_reads <= 5:
+            print("UPLOAD_HTTP_EMPTY_READ", repr(chunk), elapsed)
+        if data and _response_complete(data) is None:
+            return data
+        if elapsed >= wait_ms:
+            print("UPLOAD_HTTP_READ_TIMEOUT_MS", elapsed)
+            return data
+        time.sleep_ms(200)
+
+
+def _decode_chunked(data):
+    chunks = []
+    offset = 0
+    while True:
+        end = data.find(b"\r\n", offset)
+        if end < 0:
+            raise OSError("HTTP chunk header incomplete")
+        size = int(data[offset:end].split(b";", 1)[0].strip(), 16)
+        offset = end + 2
+        if size == 0:
+            return b"".join(chunks)
+        if offset + size + 2 > len(data):
+            raise OSError("HTTP chunk body incomplete")
+        chunks.append(data[offset:offset + size])
+        offset += size + 2
+
+
+def _write_all(stream, data, wait_ms=20000):
+    offset = 0
+    started = time.ticks_ms()
+    while offset < len(data):
+        written = stream.write(data[offset:])
+        if written:
+            offset += written
+            continue
+        if time.ticks_diff(time.ticks_ms(), started) >= wait_ms:
+            raise OSError("HTTPS request write stalled at %d/%d bytes" % (offset, len(data)))
+        time.sleep_ms(50)
+
+
+def _https_request(method, url, body=None):
+    if not url.startswith("https://"):
+        raise ValueError("Only HTTPS endpoint URLs are accepted")
+    rest = url[8:]
+    slash = rest.find("/")
+    host, path = (rest, "/") if slash < 0 else (rest[:slash], rest[slash:])
+    if not host or not path.startswith("/"):
+        raise ValueError("Invalid HTTPS URL")
+
+    print("UPLOAD_HTTPS_REQUEST", method, host)
+    address = socket.getaddrinfo(host, 443, 0, socket.SOCK_STREAM)[0]
+    raw = socket.socket(address[0], address[1], address[2])
+    stream = None
+    try:
+        try:
+            raw.settimeout(20)
+        except Exception:
+            pass
+        raw.connect(address[-1])
+        try:
+            import ussl as ssl
+        except ImportError:
+            import ssl
+        stream = ssl.wrap_socket(raw, server_hostname=host, cert_reqs=ssl.CERT_NONE)
+
+        body_bytes = body.encode("utf-8") if isinstance(body, str) else (body or b"")
+        request = (
+            method.encode("ascii") + b" " + path.encode("utf-8") + b" HTTP/1.1\r\n" +
+            b"Host: " + host.encode("ascii") + b"\r\n" +
+            b"Connection: close\r\n" +
+            b"Accept: application/json\r\n" +
+            b"User-Agent: CanMV-K230-Drive-Upload\r\n"
+        )
+        if body is not None:
+            request += (
+                b"Content-Type: application/json\r\n" +
+                b"Content-Length: " + str(len(body_bytes)).encode("ascii") + b"\r\n"
+            )
+        request += b"\r\n"
+        if body is not None:
+            request += body_bytes
+        _write_all(stream, request)
+        try:
+            stream.flush()
+        except Exception:
+            pass
+        print("UPLOAD_HTTPS_SENT_BYTES", len(request))
+
+        response = _read_http_response(stream)
+        header_end = response.find(b"\r\n\r\n")
+        status_line = response.split(b"\r\n", 1)[0]
+        parts = status_line.split(None, 2)
+        if len(parts) < 2:
+            raise OSError("HTTP bad status line: " + repr(status_line))
+        status = int(parts[1])
+        if header_end < 0:
+            raise OSError("HTTP response headers incomplete")
+        headers = {}
+        for line in response[:header_end].split(b"\r\n")[1:]:
+            if b":" in line:
+                key, value = line.split(b":", 1)
+                headers[key.decode("latin-1").strip()] = value.decode("latin-1").strip()
+        response_body = response[header_end + 4:]
+        if "chunked" in _header(headers, "Transfer-Encoding").lower():
+            response_body = _decode_chunked(response_body)
+        else:
+            length = _header(headers, "Content-Length")
+            if length:
+                response_body = response_body[:int(length)]
+        print("UPLOAD_HTTPS_STATUS", status)
+        return status, headers, response_body
+    finally:
+        try:
+            (stream or raw).close()
+        except Exception:
+            pass
+
+
+def _resolve_location(base_url, location):
+    if location.startswith("https://"):
+        return location
+    if location.startswith("//"):
+        return "https:" + location
+    if location.startswith("/"):
+        rest = base_url[8:]
+        slash = rest.find("/")
+        host = rest if slash < 0 else rest[:slash]
+        return "https://" + host + location
+    raise OSError("Unsupported Apps Script redirect format")
 
 
 def _get_webapp_json(url):
-    response = _follow_get_redirects(requests.get(url), url)
-    status = response.status_code
-    text = _response_text(response)
-    _close(response)
-    if status < 200 or status >= 300:
-        raise OSError("Apps Script HTTP " + str(status) + ": " + text[:160])
-    try:
-        result = json.loads(text)
-    except Exception:
-        raise OSError("Apps Script returned invalid JSON")
-    return result
+    current_url = url
+    for _ in range(4):
+        status, headers, body = _https_request("GET", current_url)
+        if status in (301, 302, 303, 307, 308):
+            location = _header(headers, "Location")
+            if not location:
+                raise OSError("Apps Script redirect had no Location header")
+            current_url = _resolve_location(current_url, location)
+            continue
+        if status < 200 or status >= 300:
+            raise OSError("Apps Script HTTP " + str(status) + ": " + repr(body[:160]))
+        try:
+            return json.loads(body.decode("utf-8"))
+        except Exception:
+            raise OSError("Apps Script returned invalid JSON: " + repr(body[:120]))
+    raise OSError("Too many Apps Script redirects")
 
 
 def _post_webapp(url, payload):
@@ -130,12 +278,8 @@ def _post_webapp(url, payload):
     payload["request_id"] = request_id
 
     try:
-        response = requests.post(
-            url,
-            data=json.dumps(payload),
-            headers={"Content-Type": "application/json"}
-        )
-        _close(response)
+        status, _, _ = _https_request("POST", url, json.dumps(payload))
+        print("APPS_SCRIPT_POST_STATUS", status)
     except Exception as exc:
         # Continue to poll: Apps Script may have completed the POST before its
         # response was dropped by the board's HTTP/TLS client.
