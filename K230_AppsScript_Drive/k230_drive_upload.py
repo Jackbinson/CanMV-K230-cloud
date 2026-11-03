@@ -9,10 +9,6 @@ import sys
 import time
 import ujson as json
 try:
-    import requests
-except ImportError:
-    import urequests as requests
-try:
     import usocket as socket
 except ImportError:
     import socket
@@ -67,22 +63,8 @@ def _header(headers, name):
     return ""
 
 
-def _close(response):
-    try:
-        response.close()
-    except Exception:
-        pass
-
-
-def _response_text(response):
-    """Read a requests response body as text across CanMV requests builds."""
-    try:
-        value = response.text
-    except Exception:
-        try:
-            value = response.content
-        except Exception:
-            value = b""
+def _body_text(value):
+    """Decode an HTTP response body for diagnostic and JSON parsing."""
     if isinstance(value, bytes):
         try:
             return value.decode("utf-8")
@@ -174,7 +156,7 @@ def _write_all(stream, data, wait_ms=20000):
         time.sleep_ms(50)
 
 
-def _https_request(method, url, body=None):
+def _https_request(method, url, body=None, extra_headers=None):
     if not url.startswith("https://"):
         raise ValueError("Only HTTPS endpoint URLs are accepted")
     rest = url[8:]
@@ -207,20 +189,27 @@ def _https_request(method, url, body=None):
             b"Accept: application/json\r\n" +
             b"User-Agent: CanMV-K230-Drive-Upload\r\n"
         )
+        extra_headers = extra_headers or {}
         if body is not None:
-            request += (
-                b"Content-Type: application/json\r\n" +
-                b"Content-Length: " + str(len(body_bytes)).encode("ascii") + b"\r\n"
-            )
+            content_type = _header(extra_headers, "Content-Type") or "application/json"
+            content_length = _header(extra_headers, "Content-Length") or str(len(body_bytes))
+            request += b"Content-Type: " + content_type.encode("latin-1") + b"\r\n"
+            request += b"Content-Length: " + content_length.encode("ascii") + b"\r\n"
+        for key in extra_headers:
+            lower_key = str(key).lower()
+            if lower_key in ("content-type", "content-length", "host", "connection"):
+                continue
+            request += str(key).encode("latin-1") + b": "
+            request += str(extra_headers[key]).encode("latin-1") + b"\r\n"
         request += b"\r\n"
-        if body is not None:
-            request += body_bytes
         _write_all(stream, request)
+        if body_bytes:
+            _write_all(stream, body_bytes)
         try:
             stream.flush()
         except Exception:
             pass
-        print("UPLOAD_HTTPS_SENT_BYTES", len(request))
+        print("UPLOAD_HTTPS_SENT_BYTES", len(request) + len(body_bytes))
 
         response = _read_http_response(stream)
         header_end = response.find(b"\r\n\r\n")
@@ -316,21 +305,19 @@ def _post_webapp(url, payload):
 
 
 def _read_drive_offset(upload_url, total):
-    response = requests.put(upload_url, data=b"", headers={
+    status, response_headers, body = _https_request("PUT", upload_url, b"", {
         "Content-Length": "0",
+        "Content-Type": "application/octet-stream",
         "Content-Range": "bytes */" + str(total)
     })
-    status = response.status_code
-    range_header = _header(response.headers, "Range")
-    text = _response_text(response)
+    range_header = _header(response_headers, "Range")
+    text = _body_text(body)
     if status in (200, 201):
         try:
             result = json.loads(text)
         except Exception:
             result = {}
-        _close(response)
         return total, result.get("id")
-    _close(response)
     if status != 308:
         raise OSError("Drive session query HTTP " + str(status))
     if not range_header:
@@ -353,17 +340,14 @@ def _upload_resumable(path, upload_url, total, chunk_bytes):
             if not data:
                 raise OSError("Unexpected end of file while uploading")
             end = offset + len(data) - 1
-            response = None
             try:
-                response = requests.put(upload_url, data=data, headers={
+                status, response_headers, body = _https_request("PUT", upload_url, data, {
                     "Content-Length": str(len(data)),
                     "Content-Range": "bytes " + str(offset) + "-" + str(end) + "/" + str(total),
                     "Content-Type": "application/octet-stream"
                 })
-                status = response.status_code
-                range_header = _header(response.headers, "Range")
-                text = _response_text(response)
-                _close(response)
+                range_header = _header(response_headers, "Range")
+                text = _body_text(body)
                 if status in (200, 201):
                     try:
                         completed_id = json.loads(text).get("id")
@@ -379,8 +363,6 @@ def _upload_resumable(path, upload_url, total, chunk_bytes):
                     raise OSError("Drive upload HTTP " + str(status) + ": " + text[:160])
                 retries = 0
             except Exception:
-                if response is not None:
-                    _close(response)
                 retries += 1
                 if retries > 5:
                     raise
