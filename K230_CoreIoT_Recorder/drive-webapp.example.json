@@ -1,0 +1,5 @@
+{
+  "web_app_url": "https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec",
+  "device_token": "",
+  "chunk_bytes": 262144
+}

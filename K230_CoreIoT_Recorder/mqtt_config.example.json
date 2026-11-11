@@ -1,0 +1,7 @@
+{
+  "broker": "app.coreiot.io",
+  "port": 1883,
+  "client_id": "K230_Recorder_CHANGE_ME",
+  "mqtt_access_token": "",
+  "telemetry_topic": "v1/devices/me/telemetry"
+}
