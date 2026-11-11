@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "output_dir": "/data/recordings",
+  "camera_id": "CAM01",
+  "width": 640,
+  "height": 480,
+  "clip_seconds": 30,
+  "session_seconds": 30,
+  "reserve_mb": 64,
+  "auto_start": false
+}

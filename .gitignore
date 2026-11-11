@@ -10,3 +10,21 @@
 *.partial.mp4
 __pycache__/
 *.py[cod]
+
+# CoreIoT recorder private configuration and generated reports
+**/drive-webapp.json
+**/mqtt_config.json
+**/google-pins.json
+**/apps-script-device-token.txt
+**/VerifyToken.gs
+**/recorder-test-result.json
+**/drive-retry-result.json
+**/drive-network-result.json
+**/k230-runtime-report.json
+**/*.drive.0.json
+**/*.drive.1.json
+**/remote-backup-*/
+**/remote-stage-*/
+**/recorder-source/**/manifest.json
+/K230_CoreIoT_Recorder/recorder-source/*
+!/K230_CoreIoT_Recorder/recorder-source/20261111-195907-073264/

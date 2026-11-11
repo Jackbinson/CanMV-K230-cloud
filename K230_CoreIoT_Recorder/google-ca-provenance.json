@@ -1,0 +1,17 @@
+{
+  "source": "/etc/ssl/certs/ca-certificates.crt",
+  "roots": [
+    {
+      "subject": "GTS Root R1",
+      "sha256": "d947432abde7b7fa90fc2e6b59101b1280e0e1c7e4e40fa3c6887fff57a7f4cf"
+    },
+    {
+      "subject": "GTS Root R3",
+      "sha256": "34d8a73ee208d9bcdb0d956520934b4e40e69482596e8b6f73c8426b010a6f48"
+    },
+    {
+      "subject": "GTS Root R4",
+      "sha256": "349dfa4058c5e263123b398ae795573c4e1313c83fe68f93556cd5e8031b3c7d"
+    }
+  ]
+}
